@@ -78,7 +78,7 @@ def inital_setup(uploaded_file):
 
 
     # Step 1: Load Data with updated file locations and column names
-    sold_properties = pd.read_csv(r"C:\Users\kyleb\Downloads\sold_10323.csv", encoding='latin1')
+    sold_properties = pd.read_csv(r".\sold_10323.csv", encoding='latin1')
     #actively_listed_properties = pd.read_csv(r"C:\Users\kyleb\Downloads\textexport.csv", encoding='latin1')
 
     # Step 2: Discount Active Listings
