@@ -1,6 +1,9 @@
 import streamlit as st
 from geopy.distance import geodesic
 import pandas as pd
+import requests
+import folium
+from folium.plugins import MarkerCluster
 
 def filter_properties(actively_listed, sold_properties, lot_size_lower_bound=0.5, lot_size_upper_bound=1.5, radius_miles=1.0):
     filtered_properties = []
@@ -109,3 +112,131 @@ def inital_setup(uploaded_file):
     # Calculate the map center by averaging Geo Lat and Geo Lon values from properties and comparables
 
     return viable_properties_list
+
+@st.cache_data
+def make_http_request(url, params=None, headers=None):
+    try:
+        response = requests.get(url, params=params, headers=headers)
+
+        if response.status_code == 200:
+            return response.json()  # If the response is in JSON format
+        else:
+            print(f"Request failed with status code {response.status_code}")
+            return None
+    except requests.exceptions.RequestException as e:
+        print(f"Request failed with error: {e}")
+        return None
+    
+@st.cache_data
+def filter_properties2(actively_listed, sold_properties, lot_size_lower_bound, lot_size_upper_bound, radius_miles):
+    filtered_properties = []
+    lot_size_lower = actively_listed['Approx Lot SqFt'] * lot_size_lower_bound
+    lot_size_upper = actively_listed['Approx Lot SqFt'] * lot_size_upper_bound
+    
+    # Find sold properties within the radius
+    nearby_sold_properties = sold_properties[
+        (sold_properties['Dwelling Type'] == 'Single Family - Detached') &  # Filter sold properties by Dwelling Type
+        sold_properties.apply(
+            lambda sold_property: geodesic(
+                (actively_listed['Geo Lat'], actively_listed['Geo Lon']),
+                (sold_property['Geo Lat'], sold_property['Geo Lon'])
+            ).miles <= radius_miles,
+            axis=1
+        )
+    ]
+    
+    # Find comparables based on lot size
+    comparables = nearby_sold_properties[
+        (nearby_sold_properties['Approx Lot SqFt'] >= lot_size_lower) &
+        (nearby_sold_properties['Approx Lot SqFt'] <= lot_size_upper)
+    ]
+    
+    # Store filtered data
+    filtered_properties.append({
+        'active_property': actively_listed,
+        'comparables': comparables
+    })
+    # break
+    
+    return filtered_properties
+
+def make_map(viable_properties_list):
+    all_properties = []
+
+    for entry in viable_properties_list:
+        active_property = entry['active_property']
+        comparables = entry['comparables']
+        
+        all_properties.append(active_property)
+        all_properties.extend(comparables.to_dict(orient='records'))
+
+    center_lat = sum(property['Geo Lat'] for property in all_properties) / len(all_properties)
+    center_lon = sum(property['Geo Lon'] for property in all_properties) / len(all_properties)
+
+    # Create a map centered at the calculated location
+    m = folium.Map(location=[center_lat, center_lon], zoom_start=13)
+
+    # Create a MarkerCluster for the properties
+    marker_cluster = MarkerCluster().add_to(m)
+
+    list_numbers = {}
+    # Iterate through viable properties and add markers to the map
+    for entry in viable_properties_list:
+        active_property = entry['active_property']
+        comparables = entry['comparables']
+        
+
+        # Add a marker for the active property
+        active_property_info = "a"#f"Active Property: {active_property['List Number']}<br>Price: ${active_property['List Price']}<br>Lot Size: {active_property['Approx Lot SqFt']} sqft"
+        folium.Marker(
+            location=[active_property['Geo Lat'], active_property['Geo Lon']],
+            popup=active_property_info,
+            icon=folium.Icon(color='blue', icon='home')
+        ).add_to(marker_cluster)
+        
+        # Add markers for comparables
+        for _, comp in comparables.iterrows():
+            comp_info = f"Comparable: {comp['Address']}<br>List Number: {comp['List Number']}<br>Price: ${comp['Sold Price']}<br>Lot Size: {comp['Approx Lot SqFt']} sqft<br><a href='{comp['Zillow Link']}' target='_blank'>Zillow Link</a>"
+            folium.Marker(
+                location=[comp['Geo Lat'], comp['Geo Lon']],
+                popup=comp_info,
+                icon=folium.Icon(color='red', icon='home')
+            ).add_to(marker_cluster)
+
+
+    return m
+
+@st.cache_data
+def init_setup_func():
+    sold_properties = pd.read_csv("sold_10323.csv", encoding='latin1')
+    sold_properties['Address'] = sold_properties.apply(create_address, axis=1)
+    
+    return sold_properties
+
+@st.cache_data
+def get_zillow_link(row):
+    print(row)
+    input_property = row["Address"]
+    zillow_request_url = "https://api.bridgedataoutput.com/api/v2/zestimates_v2/zestimates"
+
+    params = {
+        "access_token": st.secrets["zillow_API"],
+        "limit": 1,
+        "address": input_property
+    }
+
+    output = make_http_request(zillow_request_url, params=params)
+
+    zillow_link = output["bundle"][0]["zillowUrl"]
+
+    return zillow_link
+
+# def get_google_street_link(row):
+#     address = row["Address"]
+#     base_url = "https://www.google.com/maps/place/"
+#     address = address.replace(" ", "+")  # Replace spaces with "+" for the URL
+
+#     street_view_url = f"{base_url}{address}&layer=c"  # Append the address and set the "layer" to "c" for Street View
+    
+#     return street_view_url
+
